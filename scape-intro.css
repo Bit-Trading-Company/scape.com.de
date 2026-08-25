@@ -26,14 +26,18 @@
 #accountButton{padding:11px 24px;cursor:pointer;font-size:14px;font-weight:500}
 #accountButton:hover{background:rgba(255,255,255,.1)}
 
-.logoBox{position:absolute;inset:0;pointer-events:none;user-select:none}
+/* Fixed, not absolute: as a child of `main` (which carries a 64px top margin)
+   an absolute inset:0 box starts 64px down, so `top:50vh` put the mark 64px
+   below centre. Anchoring to the viewport is also what the canvas measures
+   against, so the ascii field and the DOM mark agree. */
+.logoBox{position:fixed;inset:0;pointer-events:none;user-select:none}
 .logo{
   /* The mark is 112 + 32 padding + 32 border = 176x144. That arithmetic only
      holds under content-box, so state it — a host page with the usual
      `*{box-sizing:border-box}` reset would otherwise collapse the mark to
      112x80 and desync it from the ascii field. */
   box-sizing:content-box;
-  position:absolute; top:50vh; left:50%; padding:16px; border:0 solid #fff;
+  position:absolute; top:50%; left:50%; padding:16px; border:0 solid #fff;
   transform:translate(-16px,-16px);
   animation-name:k-draw-logo; animation-duration:var(--splash-duration);
   animation-fill-mode:forwards; animation-timing-function:var(--splash-ease);
@@ -253,3 +257,99 @@
 .button.fx-hot{background:#000;color:#fff;box-shadow:0 0 28px rgba(255,255,255,.18)}
 .button.fx-hot .label{color:#fff}
 .button.fx-hot:hover{background:#000}
+
+/* ══════════════════════════════════════════════════════════════════════
+   POPUPS — characters on the same lattice as the mark, not a card on top.
+   ══════════════════════════════════════════════════════════════════════ */
+.popups{position:fixed;inset:0;z-index:30;pointer-events:none}
+.popup{
+  position:fixed;pointer-events:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-weight:400;white-space:pre;color:rgba(255,255,255,.9);
+  text-shadow:0 0 12px rgba(0,0,0,.9),0 0 3px rgba(0,0,0,1);
+}
+.stage main .popup,.stage main .popup *{transition:none}
+.pop-row,.pop-body{margin:0;white-space:pre;font:inherit;line-height:inherit;
+  letter-spacing:inherit;color:rgba(255,255,255,.55)}
+.pop-body{color:rgba(255,255,255,.82)}
+.pop-head{display:block;white-space:pre;color:rgba(255,255,255,.55)}
+.pop-title{display:inline;margin:0;font:inherit;line-height:inherit;
+  letter-spacing:inherit;font-weight:400;color:#fff}
+.pop-x{display:inline;font:inherit;line-height:inherit;letter-spacing:inherit;
+  color:rgba(255,255,255,.6);background:none;border:0;padding:0;cursor:pointer}
+.pop-x:hover{background:#fff;color:#000}
+.pop-x:focus-visible{outline:1px solid #fff;outline-offset:0}
+.pop-c{color:inherit}
+.pop-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
+  overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+/* ── header ── */
+.stage header{border-bottom:0}
+.menu-btn{
+  display:flex;flex-direction:column;justify-content:center;gap:4px;
+  width:44px;height:48px;padding:0 14px;margin:0;flex:none;
+  background:none;border:0;cursor:pointer;
+}
+.menu-btn span{display:block;width:16px;height:1.5px;background:#fff;transition:none}
+.menu-btn:hover span{background:rgba(255,255,255,.7)}
+.menu-btn:focus-visible{outline:1px solid #fff;outline-offset:-2px}
+
+/* search sits in the middle of the header regardless of what flanks it */
+.stage header .search-container{
+  position:absolute;left:50%;transform:translateX(-50%);
+  margin:0;flex:none;width:340px;max-width:46vw;
+}
+.stage header .search-wrapper{height:26px}
+.stage header .search-input{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;letter-spacing:.04em;padding:4px 12px;
+}
+.stage header .search-input::placeholder{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  letter-spacing:.08em;text-transform:uppercase;font-size:11px;
+}
+.stage header .search-icon{padding:4px 12px;font-size:13px;line-height:1}
+
+/* Absolute centring ignores its neighbours, so hold the search clear of the
+   menu button and CONNECT as the header narrows, and drop it once it would be
+   too small to type in. */
+@media (max-width:720px){
+  .stage header .search-container{width:min(340px,calc(100vw - 280px))}
+}
+@media (max-width:560px){
+  .stage header .search-container{display:none}
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   SMALL SCREENS
+   ══════════════════════════════════════════════════════════════════════ */
+@media (max-width:768px){
+  .stage main{margin:64px 12px}
+  .stage header{height:44px}
+  .menu-btn{height:44px}
+  #accountButton{padding:11px 16px;font-size:13px}
+  .intro{width:100%;padding:0 20px;bottom:36px}
+  .intro .button{max-width:340px;margin:14px auto}
+  .popup{font-size:11px}
+}
+
+/* Short viewports — landscape phones especially — have to fit the mark, the
+   buttons and the header in very little height, so tighten the stack rather
+   than letting the buttons ride up over the logo. */
+@media (max-height:560px){
+  .intro{bottom:14px}
+  .intro .button{margin:8px auto;padding:7px 16px}
+  .intro .button .label{font-size:12px;margin:3px}
+}
+@media (max-height:420px){
+  .stage header{height:40px}
+  .menu-btn{height:40px}
+  .intro .button{margin:6px auto;padding:5px 14px}
+}
+
+/* Coarse pointers never hover, so an effect that only exists on hover would
+   never be seen — let the idle level carry it and keep taps responsive. */
+@media (hover:none){
+  .stage main .button:hover{transform:none}
+  .stage main .button{-webkit-tap-highlight-color:transparent}
+}

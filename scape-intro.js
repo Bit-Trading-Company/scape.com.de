@@ -407,6 +407,7 @@ class AsciiIntro {
   }
 
   glyph(ch, x, y, color, alpha) {
+    if (this.avoidRect && this.blocked(x, y)) return;
     const o = this.octx, d = this.dpr;
     o.globalAlpha = alpha;
     o.fillStyle = color;
@@ -453,6 +454,15 @@ class AsciiIntro {
     this.life2 = new Uint8Array(cells);
     for (let i = 0; i < cells; i++) this.life[i] = R() < 0.32 ? 1 : 0;
     this.lifeAcc = 0;
+
+    /* Where the mark sits, in background-grid coordinates. The grid is padded
+       and origin-aligned to the mark, so its raw middle is not the mark's
+       centre — the radial fields would sit slightly off the logo. */
+    const z = cfg.zoom;
+    /* bgx()/bgy() report cell centres, so back out the half cell to land the
+       field's centre exactly on the mark's rather than half a cell past it */
+    this.bcx = ((cfg.markX + 88 * z - this.ox) / this.cell - this.gx0 - 0.5) / this.bgStep;
+    this.bcy = ((cfg.markY + 72 * z - this.oy) / this.cell - this.gy0 - 0.5) / this.bgStep;
   }
   bgx(bx) { return this.ox + (this.gx0 + bx * this.bgStep + 0.5) * this.cell; }
   bgy(by) { return this.oy + (this.gy0 + by * this.bgStep + 0.5) * this.cell; }
@@ -475,8 +485,19 @@ class AsciiIntro {
     return 'hsl(' + (((h % 360) + 360) % 360) + ',' + s + '%,' + l + '%)';
   }
 
+  /* cells an open popup is using — the field is kept out of them, so opening
+     one pushes the characters aside instead of sitting on top of them */
+  blocked(px, py) {
+    const r = this.avoidRect;
+    if (!r) return false;
+    const m = this.cell;
+    return px > r.left - m && px < r.left + r.w + m
+        && py > r.top - m && py < r.top + r.h + m;
+  }
+
   drawBackground(t, dt, hueShift) {
     const cfg = this.cfg;
+    this.avoidRect = cfg.avoid ? cfg.avoid() : null;
     if (cfg.bg === 'none' || cfg.bgAmt <= 0) return;
     /* the field recedes as the mark ignites, unless it is meant to live on */
     const fade = cfg.bgPersist ? 1 : 1 - clamp01((t - cfg.tConv) / 0.22);
@@ -511,7 +532,7 @@ class AsciiIntro {
     for (let by = 0; by < this.bh; by++) for (let bx = 0; bx < this.bw; bx++) {
       const v = (Math.sin(bx * k + T) + Math.sin(by * k * 1.6 - T * 1.2)
                + Math.sin((bx + by) * k * 0.7 + T * 0.8)
-               + Math.sin(Math.hypot(bx - this.bw / 2, by - this.bh / 2) * k * 1.3 - T * 1.6)) / 4;
+               + Math.sin(Math.hypot(bx - this.bcx, by - this.bcy) * k * 1.3 - T * 1.6)) / 4;
       const u = clamp01((v + 1) / 2);
       const u2 = u * u; const a = u2 * u2 * amt * 2.1;
       if (a < 0.035) continue;
@@ -523,7 +544,7 @@ class AsciiIntro {
   bg_tunnel(t, dt, hueShift, amt) {
     const ramp = this.ramp, n = ramp.length - 1;
     const T = t * this.cfg.bgSpeed;
-    const cx = this.bw / 2, cy = this.bh / 2;
+    const cx = this.bcx, cy = this.bcy;
     const spokes = 6 + this.cfg.bgScale * 2;
     for (let by = 0; by < this.bh; by++) for (let bx = 0; bx < this.bw; bx++) {
       const dx = bx - cx, dy = (by - cy) * 1.15;
@@ -649,7 +670,7 @@ class AsciiIntro {
   bg_shaft(t, dt, hueShift, amt) {
     const ramp = this.ramp, n = ramp.length - 1;
     const T = t * this.cfg.bgSpeed;
-    const cx = this.bw / 2, cy = this.bh / 2;
+    const cx = this.bcx, cy = this.bcy;
     const rot = T * 0.22, ca = Math.cos(rot), sa = Math.sin(rot);
     const depthK = 9 + this.cfg.bgScale * 2;
     for (let by = 0; by < this.bh; by++) for (let bx = 0; bx < this.bw; bx++) {
@@ -679,7 +700,7 @@ class AsciiIntro {
     const T = t * this.cfg.bgSpeed * 0.18;
     const growth = 1.75;
     const phase = T - Math.floor(T);            /* 0..1, drives the whole stack */
-    const cx = this.bw / 2, cy = this.bh / 2;
+    const cx = this.bcx, cy = this.bcy;
     const outer = Math.max(this.bw, this.bh);
     const self = this;
     for (let k = 0; k < 7; k++) {
@@ -705,7 +726,7 @@ class AsciiIntro {
   bg_moire(t, dt, hueShift, amt) {
     const ramp = this.ramp, n = ramp.length - 1;
     const T = t * this.cfg.bgSpeed;
-    const cx = this.bw / 2, cy = this.bh / 2;
+    const cx = this.bcx, cy = this.bcy;
     const s1 = this.cfg.bgScale * 1.6 + Math.sin(T * 0.27) * 0.5;
     const s2 = s1 * (1.13 + Math.sin(T * 0.19) * 0.07);
     const rot = T * 0.05, ca = Math.cos(rot), sa = Math.sin(rot);
@@ -1415,6 +1436,251 @@ class ButtonFx {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Popups.
+
+   Same grid, same character set, same palette as the intro — a popup is not
+   a card sitting on top of the field, it is more characters on the lattice.
+   Each glyph starts empty, flashes a coloured scramble at its own moment,
+   then settles into what it actually says. Closing runs it backwards.
+
+   The animated block is aria-hidden and a plain-text copy sits beside it, so
+   a screen reader is never handed the scramble.
+   ═══════════════════════════════════════════════════════════════════════ */
+const POPUP_EMAIL = 'contact@bit-trading-company.com';
+const POPUPS = {
+  access: {
+    title: 'ACCESS',
+    text: 'Product only available to invitees, please email '
+        + POPUP_EMAIL + ' for access.',
+    body: ['Product only available to invitees,',
+           'please email', POPUP_EMAIL, 'for access.']
+  }
+};
+
+const padTo = (s, n) => s.length > n ? s.slice(0, n) : s + ' '.repeat(n - s.length);
+
+/* wrap to `n` columns without ever breaking a word (the address especially) */
+function wrapLines(lines, n) {
+  const out = [];
+  for (const line of lines) {
+    if (line.length <= n) { out.push(line); continue; }
+    let cur = '';
+    for (const w of line.split(' ')) {
+      if (!cur.length) { cur = w; }
+      else if (cur.length + 1 + w.length <= n) { cur += ' ' + w; }
+      else { out.push(cur); cur = w; }
+    }
+    if (cur.length) out.push(cur);
+  }
+  return out;
+}
+
+class ScapePopups {
+  constructor(ctrl) {
+    this.ctrl = ctrl;
+    this.current = null;
+    this.host = document.createElement('div');
+    this.host.className = 'popups';
+    this.host.setAttribute('data-scape-ui', '');
+    (ctrl.root || document.body).appendChild(this.host);
+  }
+  destroy() {
+    this.closeNow();
+    this.host.remove();
+  }
+
+  /* A popup character cell is a whole number of intro cells across and down,
+     so every glyph starts on a grid column and every line on a grid row. The
+     intro's cells are square; text is not, so width and height snap
+     independently to whatever multiple lands nearest a readable size. */
+  metrics() {
+    const g = this.ctrl.grid();
+    const k = Math.max(0.4, this.ctrl.cfg.popupScale);
+    const cw = Math.max(1, Math.round(8.5 * k / g.cell)) * g.cell;
+    const chh = Math.max(1, Math.round(17 * k / g.cell)) * g.cell;
+    return { cw, chh, ox: g.ox, oy: g.oy, cell: g.cell };
+  }
+
+  place(el, cols, rows) {
+    const m = this.metrics();
+    /* start on the first grid line that clears the margin */
+    const mx = this.ctrl.cfg.popupX, my = this.ctrl.cfg.popupY;
+    const left = m.ox + Math.ceil((mx - m.ox) / m.cell) * m.cell;
+    const top = m.oy + Math.ceil((my - m.oy) / m.cell) * m.cell;
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+    el.style.fontSize = (m.cw / 0.6).toFixed(2) + 'px';
+    el.style.lineHeight = m.chh + 'px';
+    el.style.letterSpacing = '0px';
+    /* nudge the tracking so the measured advance is exactly one cell wide */
+    const probe = el.querySelector('.pop-row');
+    if (probe) {
+      const w = probe.getBoundingClientRect().width / Math.max(1, cols);
+      if (w > 0.1) el.style.letterSpacing = (m.cw - w).toFixed(3) + 'px';
+    }
+    this.rect = { left, top, w: cols * m.cw, h: rows * m.chh, cell: m.cell };
+  }
+
+  build(key) {
+    const spec = POPUPS[key], c = this.ctrl.cfg;
+    const W = Math.max(24, Math.round(c.popupW));
+    const inner = W - 4;                          /* '| ' and ' |' */
+    const el = document.createElement('section');
+    el.className = 'popup';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'false');
+    el.setAttribute('aria-labelledby', 'popup-title-' + key);
+
+    const rule = '+' + '-'.repeat(W - 2) + '+';
+    const body = wrapLines(spec.body, inner);
+    const spacer = Math.max(1, W - 4 - spec.title.length - 3);
+    el.innerHTML =
+      '<pre class="pop-row" aria-hidden="true">' + rule + '</pre>'
+      + '<div class="pop-row pop-head"><span aria-hidden="true">| </span>'
+      + '<h2 class="pop-title" id="popup-title-' + key + '">' + spec.title + '</h2>'
+      + '<span aria-hidden="true">' + ' '.repeat(spacer) + '</span>'
+      + '<button class="pop-x" type="button" aria-label="Close">[x]</button>'
+      + '<span aria-hidden="true"> |</span></div>'
+      + '<pre class="pop-row" aria-hidden="true">' + rule + '</pre>'
+      + '<pre class="pop-body" aria-hidden="true">'
+      + body.map(l => '| ' + padTo(l, inner) + ' |').join('\n') + '</pre>'
+      + '<pre class="pop-row" aria-hidden="true">' + rule + '</pre>'
+      + '<p class="pop-sr">' + spec.text + '</p>';
+    return { el, cols: W, rows: body.length + 4 };
+  }
+
+  /* one span per character, made once, so the animation can address them
+     without rebuilding the DOM every frame */
+  cellsOf(el) {
+    const cells = [];
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const texts = [];
+    let n;
+    while ((n = walk.nextNode())) {
+      if (n.parentElement.closest('.pop-sr')) continue;
+      texts.push(n);
+    }
+    for (const node of texts) {
+      const frag = document.createDocumentFragment();
+      for (const ch of node.nodeValue) {
+        if (ch === '\n' || ch === ' ') { frag.append(ch); continue; }
+        const s = document.createElement('span');
+        s.className = 'pop-c';
+        s.dataset.ch = ch;
+        s.textContent = ch;
+        frag.append(s);
+        cells.push(s);
+      }
+      node.parentNode.replaceChild(frag, node);
+    }
+    return cells;
+  }
+
+  settle(cells, dir) {
+    for (const c of cells) {
+      c.style.color = '';
+      c.textContent = dir > 0 ? c.dataset.ch : '';
+    }
+  }
+
+  /* `owner` is the popup this run belongs to — a close animation that lands
+     after its popup is gone must not tear down whatever replaced it */
+  animate(owner, cells, dir, done) {
+    const c = this.ctrl.cfg;
+    const alive = () => this.current === owner;
+    if (c.reducedMotion === 'skip' && window.matchMedia
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      this.settle(cells, dir);
+      if (alive()) done && done();
+      return;
+    }
+    const chars = CHARSETS[c.charset] || CHARSETS.ascii;
+    const pal = PALETTES[c.palette] || PALETTES.spectrum;
+    const dur = Math.max(0.05, c.popupDur) * 1000;
+    const flash = Math.max(0.01, c.popupFlash);
+    const stagger = Math.min(0.98, Math.max(0, c.popupStagger));
+    const order = cells.map(() => Math.random());
+    const state = new Array(cells.length).fill(-1);
+    const t0 = performance.now();
+    const self = this;
+
+    function step(now) {
+      const t = Math.min(1, (now - t0) / dur);
+      const prog = dir > 0 ? t : 1 - t;
+      for (let i = 0; i < cells.length; i++) {
+        const age = prog - order[i] * stagger;
+        const want = age < 0 ? 0 : age < flash ? 1 : 2;
+        if (want === state[i]) continue;
+        state[i] = want;
+        const el = cells[i];
+        if (want === 0) { el.textContent = ''; el.style.color = ''; }
+        else if (want === 1) {
+          el.textContent = chars[(Math.random() * chars.length) | 0];
+          el.style.color = 'hsl(' + pal.hue(Math.random) + ','
+            + pal.sat + '%,62%)';
+        } else { el.textContent = el.dataset.ch; el.style.color = ''; }
+      }
+      if (t < 1) owner.raf = requestAnimationFrame(step);
+      else finish();
+    }
+    /* a backgrounded tab can starve the frames — never leave it half-written */
+    owner.fallback = setTimeout(function () {
+      self.settle(cells, dir); finish();
+    }, dur + 400);
+    function finish() {
+      clearTimeout(owner.fallback);
+      owner.fallback = 0; owner.raf = 0;
+      if (alive()) done && done();
+    }
+    step(performance.now());          /* first state now, not next frame */
+  }
+
+  open(key, trigger) {
+    if (!POPUPS[key]) return;
+    if (this.current && this.current.key === key) return;
+    if (this.current) this.closeNow();
+
+    const built = this.build(key);
+    this.host.appendChild(built.el);
+    this.place(built.el, built.cols, built.rows);
+    const cells = this.cellsOf(built.el);
+    for (const c of cells) c.textContent = '';
+
+    this.current = { key, el: built.el, cells, raf: 0, fallback: 0,
+                     returnTo: trigger || null };
+    this.animate(this.current, cells, +1);
+
+    const x = built.el.querySelector('.pop-x');
+    x.addEventListener('click', () => this.close());
+    built.el.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.stopPropagation(); this.close(); }
+    });
+    x.focus();
+  }
+
+  closeNow() {
+    if (!this.current) return;
+    cancelAnimationFrame(this.current.raf);
+    clearTimeout(this.current.fallback);
+    this.current.el.remove();
+    this.current = null;
+    this.rect = null;
+  }
+  close() {
+    if (!this.current) return;
+    const owner = this.current;
+    cancelAnimationFrame(owner.raf);
+    clearTimeout(owner.fallback);
+    this.animate(owner, owner.cells, -1, () => {
+      const back = owner.returnTo;
+      this.closeNow();
+      back && back.focus && back.focus();
+    });
+  }
+  get openKey() { return this.current ? this.current.key : null; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    ScapeIntro — the whole animation, with no framework attached.
    The tune panel drives this; production imports it on its own. Everything
    above this line (AsciiIntro, ButtonFx, the mark, the charsets) is already
@@ -1444,6 +1710,9 @@ const DEFAULTS = {
   btnFx: 'scramble', btnInt: 80, btnSpeed: 1, btnIdle: 22, btnCharPx: 6,
   invert: true, btnMono: true, btnInvertMode: 'snap',
   btnAttack: 0.09, btnRelease: 0.22,
+  /* popups — opened by the buttons, drawn on the intro's own grid */
+  popupOn: true, popupW: 40, popupX: 28, popupY: 76, popupScale: 1,
+  popupDur: 0.95, popupFlash: 0.11, popupStagger: 0.72,
   /* behaviour */
   loop: false, skippable: true, pauseWhenHidden: true,
   reducedMotion: 'skip', once: false
@@ -1460,6 +1729,8 @@ const CONFIG_GROUPS = [
   ['parts',      ['partsOn', 'partDelay']],
   ['buttons',    ['btnFx', 'btnInt', 'btnSpeed', 'btnIdle', 'btnCharPx', 'invert',
                   'btnMono', 'btnInvertMode', 'btnAttack', 'btnRelease']],
+  ['popups',     ['popupOn', 'popupW', 'popupX', 'popupY', 'popupScale',
+                  'popupDur', 'popupFlash', 'popupStagger']],
   ['behaviour',  ['loop', 'skippable', 'pauseWhenHidden', 'reducedMotion', 'once']]
 ];
 
@@ -1493,6 +1764,7 @@ class ScapeIntro {
   mount() {
     this.syncButtons();
     this.onResize = () => {
+      this._ezKey = null;
       for (const f of this.fx) f.dirty = true;
       this.apply();
       const e = this.engine;
@@ -1528,6 +1800,9 @@ class ScapeIntro {
     /* two frames of slack so the stylesheet has landed before the mark is
        measured; the engine re-anchors on its own after that anyway */
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      /* the first apply() ran before the stylesheet had laid the header and
+         buttons out, so anything measured from them then is stale */
+      this._ezKey = null;
       this.apply();
       if (this.shouldSkipEntirely()) this.finish();
       else this.replay();
@@ -1545,6 +1820,7 @@ class ScapeIntro {
       window.removeEventListener(t, this.onSkip);
     for (const f of this.fx) f.destroy();
     this.fx = [];
+    if (this.popups) { this.popups.destroy(); this.popups = null; }
   }
 
   /* honour the OS motion setting, and optionally only ever play once */
@@ -1568,7 +1844,28 @@ class ScapeIntro {
     if (btns.length === this.fx.length && this.fx.every((f, i) => f.btn === btns[i])) return;
     for (const f of this.fx) f.destroy();
     this.fx = btns.map(b => new ButtonFx(b));
+    for (const b of btns) {
+      if (b.__scapeBound) continue;
+      b.__scapeBound = true;
+      /* they are divs in the markup — give them the semantics anyway */
+      if (!b.hasAttribute('role')) b.setAttribute('role', 'button');
+      if (!b.hasAttribute('tabindex')) b.setAttribute('tabindex', '0');
+      b.addEventListener('click', () => this.openPopup('access', b));
+      b.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          this.openPopup('access', b);
+        }
+      });
+    }
   }
+
+  openPopup(key, trigger) {
+    if (!this.cfg.popupOn) return;
+    if (!this.popups) this.popups = new ScapePopups(this);
+    this.popups.open(key, trigger);
+  }
+  closePopup() { if (this.popups) this.popups.close(); }
   tickButtons(now) {
     let dt = (now - this.btnLast) / 1000; this.btnLast = now;
     if (dt > 0.1) dt = 0.1;
@@ -1590,7 +1887,35 @@ class ScapeIntro {
      viewport can hold — canvas and DOM both read this so they stay in step */
   effZoom() {
     const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
-    return Math.max(0.6, Math.min(this.cfg.zoom, w * 0.74 / 176, h * 0.56 / 144));
+    const key = w + 'x' + h + ':' + this.cfg.zoom;
+    if (this._ezKey === key) return this._ez;
+    /* The mark is centred on the viewport, so whichever of the header or the
+       buttons reaches closer to the middle is what limits its size — measure
+       them rather than guessing a fraction, or a landscape phone puts the mark
+       through the buttons. */
+    let half = h * 0.28;
+    const r = this.root;
+    if (r) {
+      const hd = r.querySelector('header');
+      const intro = r.querySelector('.intro');
+      const top = hd ? hd.getBoundingClientRect().height : 0;
+      const bot = intro ? h - intro.getBoundingClientRect().top : 0;
+      half = Math.max(36, h / 2 - Math.max(top, bot) - 10);
+    }
+    this._ezKey = key;
+    return (this._ez = Math.max(0.6,
+      Math.min(this.cfg.zoom, w * 0.74 / 176, half * 2 / 144)));
+  }
+
+  /* The lattice everything shares. Valid before the intro starts and after it
+     ends, so a popup opened at any point lands on the same cells the mark did. */
+  grid() {
+    const e = this.engine;
+    if (e && e.cell && e.ox !== undefined) return { ox: e.ox, oy: e.oy, cell: e.cell };
+    const cell = MODULE * this.effZoom() / this.cfg.density;
+    const m = this.markRect();
+    return { ox: m.x - Math.round(m.x / cell) * cell,
+             oy: m.y - Math.round(m.y / cell) * cell, cell: cell };
   }
 
   apply() {
@@ -1613,7 +1938,7 @@ class ScapeIntro {
     if (this.cfg.anchor) return this.cfg.anchor();
     const box = this.root.querySelector('.logoBox') || this.root;
     const probe = document.createElement('div');
-    probe.style.cssText = 'box-sizing:content-box;position:absolute;top:50vh;left:50%;padding:16px;' +
+    probe.style.cssText = 'box-sizing:content-box;position:absolute;top:50%;left:50%;padding:16px;' +
       'border:16px solid transparent;width:112px;height:80px;' +
       'transform:translate(-88px,-72px);visibility:hidden;pointer-events:none';
     box.appendChild(probe);
@@ -1624,6 +1949,7 @@ class ScapeIntro {
   }
 
   replay() {
+    this._ezKey = null;
     this.clearTimers();
     const r = this.root; if (!r) return;
     const c = this.cfg, ascii = isAscii(c.style);
@@ -1651,6 +1977,7 @@ class ScapeIntro {
         drift: c.drift,
         bg: c.bg, bgAmt: c.bgAmt / 100, bgSpeed: c.bgSpeed / 100,
         bgScale: c.bgScale, bgColor: c.bgColor, bgHue: c.bgHue, bgPersist: c.bgPersist,
+        avoid: () => (this.popups && this.popups.rect) || null,
         pulse: c.pulse, pulseEchoes: c.pulseEchoes, pulseReach: c.pulseReach / 100,
         pulseThick: c.pulseThick, pulseAmt: c.pulseAmt / 100,
         pulseColor: c.pulseColor, pulseHue: c.pulseHue,
@@ -1731,6 +2058,7 @@ class ScapeIntro {
 
   /* patch the config; `replay` false applies without restarting the intro */
   set(patch, replay) {
+    this._ezKey = null;
     if (patch && patch.partDelay) patch = Object.assign({}, patch,
       { partDelay: Object.assign({}, this.cfg.partDelay, patch.partDelay) });
     Object.assign(this.cfg, patch);

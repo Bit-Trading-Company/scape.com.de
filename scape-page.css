@@ -9,6 +9,10 @@ html, body { margin: 0; padding: 0; height: 100%; }
 body {
   background: #000;
   color: rgb(223,219,219);
-  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
+/* The intro is a full-viewport splash — nothing here is meant to scroll, and
+   on mobile a 100vh stage against a shrinking URL bar otherwise leaves a
+   rubber-banding gutter. */
+html, body { overflow: hidden; overscroll-behavior: none; }
+body { position: fixed; inset: 0; width: 100%; }

@@ -90,6 +90,8 @@ var PRESETS = [
 
 var CSS = ''
 + '.st{position:fixed;right:16px;bottom:16px;z-index:2147483000;width:312px;'
++ 'max-width:calc(100vw - 20px);max-height:calc(100dvh - 20px);'
++ 'display:flex;flex-direction:column;'
 + 'background:rgba(10,10,10,.94);border:1px solid rgba(255,255,255,.22);'
 + 'color:rgba(255,255,255,.82);font:400 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;'
 + 'letter-spacing:.06em;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);'
@@ -112,9 +114,9 @@ var CSS = ''
 + 'color:rgba(255,255,255,.78);font:inherit;letter-spacing:.1em}'
 + '.st-b:hover{border-color:rgba(255,255,255,.6);color:#fff}'
 + '.st-b.on{background:#fff;color:#000;border-color:#fff}'
-+ '.st-tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:3px;padding:10px 10px 0}'
++ '.st-tabs{display:grid;grid-template-columns:repeat(6,1fr);gap:2px;padding:10px 10px 0}'
 + '.st-tabs .st-b{padding:6px 0;letter-spacing:.04em}'
-+ '.st-body{max-height:70vh;overflow:auto;padding:12px 10px}'
++ '.st-body{flex:1;min-height:0;overflow:auto;padding:12px 10px;overscroll-behavior:contain}'
 + '.st-sec{text-transform:uppercase;color:rgba(255,255,255,.42);'
 + 'letter-spacing:.14em;margin:14px 0 8px}'
 + '.st-sec:first-child{margin-top:0}'
@@ -141,9 +143,7 @@ var CSS = ''
 + 'background:rgba(120,255,170,.08);color:rgba(150,255,190,.95);text-transform:uppercase}'
 + '.st-warn{border-color:rgba(255,190,0,.4);background:rgba(255,190,0,.08);'
 + 'color:rgba(255,205,90,.9);text-transform:none}'
-+ '.st-hint{position:fixed;left:16px;bottom:16px;z-index:2147482000;'
-+ 'font:400 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.16em;'
-+ 'color:rgba(255,255,255,.28);text-transform:uppercase;pointer-events:none}';
++ '';
 
 function el(tag, cls, txt) {
   var n = document.createElement(tag);
@@ -354,7 +354,8 @@ ScapeTune.prototype.build = function () {
   this.noteEl = el('div', 'st-note'); this.noteEl.hidden = true;
 
   var panes = {};
-  [['intro','Intro'],['ascii','Ascii'],['field','Field'],['parts','Parts'],['buttons','Btns']]
+  [['intro','Intro'],['ascii','Ascii'],['field','Field'],['parts','Parts'],
+   ['buttons','Btns'],['popups','Pop']]
     .forEach(function (t) {
       var b = el('button', 'st-b', t[1]);
       b.addEventListener('click', function () { self.tab = t[0]; self.showTab(); });
@@ -374,6 +375,7 @@ ScapeTune.prototype.build = function () {
   this.fillField(panes.field);
   this.fillParts(panes.parts);
   this.fillButtons(panes.buttons);
+  this.fillPopups(panes.popups);
   this.showTab();
   this.sync();
 };
@@ -497,6 +499,29 @@ ScapeTune.prototype.fillParts = function (p) {
   p.appendChild(this.button('↻ Replay', function () { C.replay(); }));
 };
 
+ScapeTune.prototype.fillPopups = function (p) {
+  var self = this, C = this.ctrl;
+  var w = el('div', 'st-note st-warn');
+  w.textContent = 'Clicking CREATE or EXPLORE opens the popup. It is drawn on '
+    + 'the same lattice as the mark, and the background field steps around it.';
+  p.appendChild(w);
+  p.appendChild(this.toggle('popupOn', 'Popups on click', false));
+  p.appendChild(this.range('popupW', 'Width', 24, 72, 1, function (v) { return v + ' cols'; }, false));
+  p.appendChild(this.range('popupScale', 'Text size', .5, 2.5, .05, function (v) {
+    return v.toFixed(2) + '×'; }, false));
+  p.appendChild(this.range('popupX', 'From left', 0, 400, 4, function (v) { return v + 'px'; }, false));
+  p.appendChild(this.range('popupY', 'From top', 0, 400, 4, function (v) { return v + 'px'; }, false));
+  p.appendChild(this.sec('Arrival'));
+  p.appendChild(this.range('popupDur', 'Duration', .15, 3, .05, function (v) {
+    return v.toFixed(2) + 's'; }, false));
+  p.appendChild(this.range('popupFlash', 'Colour flash', .02, .5, .01, function (v) {
+    return Math.round(v * 100) + '%'; }, false));
+  p.appendChild(this.range('popupStagger', 'Stagger', 0, .98, .02, function (v) {
+    return Math.round(v * 100) + '%'; }, false));
+  p.appendChild(this.button('Open popup', function () { C.openPopup('access'); }));
+  p.appendChild(this.button('Close popup', function () { C.closePopup(); }));
+};
+
 ScapeTune.prototype.fillButtons = function (p) {
   p.appendChild(this.sec('Effect'));
   p.appendChild(this.chips('btnFx', BTNFX));
@@ -523,15 +548,14 @@ ScapeTune.prototype.fillButtons = function (p) {
   p.appendChild(this.button('⚡ Trigger once', function () { self.ctrl.pulseButtons(); }));
 };
 
-ScapeTune.prototype.show = function () { this.root.hidden = false; setHint(false); };
-ScapeTune.prototype.hide = function () { this.root.hidden = true; setHint(true); };
+ScapeTune.prototype.show = function () { this.root.hidden = false; };
+ScapeTune.prototype.hide = function () { this.root.hidden = true; };
 ScapeTune.prototype.toggleVis = function () {
   if (this.root.hidden) this.show(); else this.hide();
 };
 
 /* ── auto-attach: press T anywhere ─────────────────────────────────────── */
-var panel = null, hintEl = null;
-function setHint(on) { if (hintEl) hintEl.hidden = !on; }
+var panel = null;
 function keyHandler(e) {
   if (e.key !== 't' && e.key !== 'T') return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -545,15 +569,6 @@ function keyHandler(e) {
 }
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', keyHandler);
-  var addHint = function () {
-    if (hintEl) return;
-    hintEl = el('div', 'st-hint', 'press t to tune');
-    document.body.appendChild(hintEl);
-    if (panel && !panel.root.hidden) hintEl.hidden = true;
-  };
-  if (document.readyState === 'loading')
-    document.addEventListener('DOMContentLoaded', addHint);
-  else addHint();
 }
 
 return {
