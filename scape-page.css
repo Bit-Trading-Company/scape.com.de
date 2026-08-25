@@ -1,0 +1,14 @@
+/* SCAPE page shell — optional.
+   The playground gets `html,body{height:100%;margin:0}` for free from its host
+   runtime, which is why the bundle looked different: without it the UA's 8px
+   body margin pushes a 100vh .stage into a 16px scroll and leaves an unpainted
+   band around the edges.
+   Skip this file if your site already resets the page — scape-intro.css itself
+   touches nothing outside .stage. */
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: #000;
+  color: rgb(223,219,219);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
